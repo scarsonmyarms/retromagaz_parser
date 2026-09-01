@@ -1,103 +1,93 @@
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import json
 from decouple import config
 
 
 def clean_data(data):
-    """Очищення даних від null и перетворення цін в числа"""
+    """Очищення даних та фільтрація товарів без ціни"""
     cleaned = []
     for item in data:
         if item is None:
             continue
+
+        # 1. Пропускаємо товари, де ціна None (null) або порожня
+        raw_price = item.get('product_base_price')
+        if raw_price is None or raw_price == '':
+            continue
+
         try:
-            # Видаляємо пробіли в цінах та перетворюємо в число
-            price = item.get('product_base_price', '').replace(' ', '')
+            # Очищаємо від пробілів (наприклад "1 500" -> "1500")
+            price = str(raw_price).replace(' ', '')
+
+            # 2. Якщо після очищення це число - зберігаємо, інакше пропускаємо
             if price.isdigit():
                 item['product_base_price'] = int(price)
-            cleaned.append(item)
+                cleaned.append(item)
         except Exception as e:
-            print(f"Помилка опрацювання елемента: {item}, помилка: {e}")
+            print(f"Помилка опрацювання елемента: {item.get('product_name', 'Unknown')}, помилка: {e}")
+
     return cleaned
 
 
-def upload_to_google_sheets(json_file, spreadsheet_name):
-    # 1. Загрузка и очищення даних
+def upload_to_google_sheets(json_file, spreadsheet_url, sheet_name):
     with open(json_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     cleaned_data = clean_data(data)
     if not cleaned_data:
-        print("Немає даних для завантаження")
+        print(f"[-] Немає валідних даних (з цінами) для завантаження на аркуш '{sheet_name}'")
         return
 
-    # 2. Авторизація в Google Sheets API
-    scope = [
-        'https://spreadsheets.google.com/feeds',
-        'https://www.googleapis.com/auth/drive'
-    ]
-
-    token = config('JSON_KEY') # це JSON-ключ із .env
-
-    # Вкажіть шлях до вашого JSON-ключа сервісного аккаунта
-    creds = ServiceAccountCredentials.from_json_keyfile_name(token, scope)
-    client = gspread.authorize(creds)
+    token = config('JSON_KEY')
+    client = gspread.service_account(filename=token)
 
     try:
-        # 3. Відкриття та створення таблиці
-        try:
-            spreadsheet = client.open(spreadsheet_name)
-        except gspread.SpreadsheetNotFound:
-            spreadsheet = client.create(spreadsheet_name)
+        # Відкриття вашої існуючої таблиці за прямим посиланням
+        spreadsheet = client.open_by_url(spreadsheet_url)
 
-        # 4. Робота с листом
+        # Пошук або створення потрібного аркуша
         try:
-            worksheet = spreadsheet.worksheet("prervirka") # тут назва листа
+            worksheet = spreadsheet.worksheet(sheet_name)
         except gspread.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title="perevirka", rows=1000, cols=10) # тут назва листа
+            print(f"[~] Аркуш '{sheet_name}' не знайдено. Створюємо новий...")
+            worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=10)
 
-        # 5. Підготовка даних
+        # Формування даних
         headers = ["Название игры", "Цена", "Состояние", "Язык"]
-        rows = []
+        all_rows = [headers]
 
         for item in cleaned_data:
             name = item.get('product_name', '')
-
-            # Отримуємо стан (Новый/Б/У)
             condition = "Новый" if "Новий" in name else "Б/У" if "Б/У" in name else ""
-
-            # Отримуємо мову
             language = "Русский" if "Російська" in name or "Російські" in name else "Украинский" if "Українські" in name else "Английский" if "Англійська" in name else ""
 
-            row = [
+            all_rows.append([
                 name,
                 item.get('product_base_price', ''),
                 condition,
                 language
-            ]
-            rows.append(row)
+            ])
 
-        # 6. Запис даних
+        # Пакетний запис даних
         worksheet.clear()
-        worksheet.append_row(headers)
-        worksheet.append_rows(rows)
+        worksheet.update(values=all_rows, range_name='A1')
 
-        # 7. Форматування
+        # Стилізація
         worksheet.format("A1:D1", {
             "textFormat": {"bold": True},
             "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9}
         })
-
-        # Автонастройка ширини столбців
         worksheet.columns_auto_resize(0, 3)
 
-        print(f"Данные успешно загружены в таблицу: {spreadsheet_name}")
-        print(f"Ссылка на таблицу: https://docs.google.com/spreadsheets/d/{spreadsheet.id}")
+        print(f"[+] Дані успішно завантажені на аркуш '{sheet_name}'. Всього товарів: {len(all_rows) - 1}")
 
     except Exception as e:
-        print(f"Ошибка при работе с Google Sheets: {e}")
+        print(f"[-] Помилка при роботі з Google Sheets: {e}")
 
 
-# Використання
 if __name__ == '__main__':
-    upload_to_google_sheets('products_data.json', 'retromagaz parser')
+    # 1. Вставте сюди повне посилання на вашу створену таблицю
+    TABLE_URL = "https://docs.google.com/spreadsheets/d/1PabVQZFytlfIxgaj4I1GldhovM_VuTMQZpMX2KzmPU4/edit"
+
+    # 2. Вказуємо файл, посилання і точну назву аркуша
+    upload_to_google_sheets('PRODUCTS_DATA.json', TABLE_URL, 'PS2-1')

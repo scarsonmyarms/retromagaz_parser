@@ -1,6 +1,7 @@
 import re
 import time as tm
 from bs4 import BeautifulSoup
+import requests
 
 
 def page_down(driver):
@@ -20,16 +21,20 @@ def page_down(driver):
                             }, scrollInterval);
                         ''')
 
-def collect_product_info(driver, url=''):
 
-    driver.switch_to.new_window('tab')
+# Видаліть аргумент driver з функції
+def collect_product_info(url):
+    # Додаємо заголовки, щоб сайт думав, що ми звичайний користувач
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
 
-    tm.sleep(3)
-    driver.get(url=url)
-    tm.sleep(3)
+    # Завантажуємо сторінку миттєво
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()  # Перевіряє чи немає помилки 404/500
 
-    page_source = str(driver.page_source)
-    soup = BeautifulSoup(page_source, 'lxml')
+    # Парсимо
+    soup = BeautifulSoup(response.text, 'lxml')
 
     product_name = soup.find('p', class_='h1').text.strip()
     print(product_name)
@@ -42,9 +47,6 @@ def collect_product_info(driver, url=''):
         print(f"посилка при парсингу {url}: {e}")
         price = None
 
-    driver.close()
-    driver.switch_to.window(driver.window_handles[0])
-
     product_data = (
         {
             'product_name': product_name,
@@ -52,7 +54,5 @@ def collect_product_info(driver, url=''):
         }
     )
 
-    # driver.close()
-    # driver.switch_to.window(driver.window_handles[0])
 
     return product_data
